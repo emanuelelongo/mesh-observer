@@ -1,0 +1,91 @@
+version: "3"
+
+dotenv:
+  - .env
+
+vars:
+  IMAGE_REPOSITORY: '{{.IMAGE_REPOSITORY | default "ghcr.io/your-user/mesh-observer"}}'
+  IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+  MQTT_BROKER: '{{.MQTT_BROKER | default "tcp://localhost:1883"}}'
+  REDIS_ADDR: '{{.REDIS_ADDR | default "localhost:6379"}}'
+  MQTT_TOPIC_FILTER: '{{.MQTT_TOPIC_FILTER | default "msh/+/2/json/#"}}'
+  MQTT_QOS: '{{.MQTT_QOS | default "1"}}'
+  START_MQTT_BROKER_ON_PORT: '{{.START_MQTT_BROKER_ON_PORT | default ""}}'
+  START_REDIS_ON_PORT: '{{.START_REDIS_ON_PORT | default ""}}'
+
+tasks:
+  help:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  build-image:
+    desc: Build mesh-observer container image
+    cmds:
+      - docker build -t {{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} .
+
+  push-image:
+    desc: Push mesh-observer image to registry
+    cmds:
+      - docker push {{.IMAGE_REPOSITORY}}:{{.IMAGE_TAG}}
+
+  observer:
+    desc: Run observer locally using MQTT_* and REDIS_* values from .env
+    env:
+      MQTT_BROKER: "{{.MQTT_BROKER}}"
+      REDIS_ADDR: "{{.REDIS_ADDR}}"
+      MQTT_TOPIC_FILTER: "{{.MQTT_TOPIC_FILTER}}"
+      MQTT_QOS: "{{.MQTT_QOS}}"
+    preconditions:
+      - sh: test -n "{{.MQTT_BROKER}}"
+        msg: "Set MQTT_BROKER in .env (e.g. tcp://localhost:1883 or ssl://broker:8883)"
+      - sh: test -n "{{.REDIS_ADDR}}"
+        msg: "Set REDIS_ADDR in .env (e.g. localhost:6379)"
+    cmds:
+      - go run .
+
+  broker-up:
+    desc: Start local Mosquitto container when START_MQTT_BROKER_ON_PORT is set
+    cmds:
+      - >-
+        sh -c 'if [ -z "{{.START_MQTT_BROKER_ON_PORT}}" ]; then
+        echo "Skipping local Mosquitto startup: START_MQTT_BROKER_ON_PORT is empty";
+        exit 0;
+        fi;
+        docker rm -f meshtastic-observer-mosquitto >/dev/null 2>&1 || true;
+        docker run -d --name meshtastic-observer-mosquitto -p {{.START_MQTT_BROKER_ON_PORT}}:1883 -v "${PWD}/mosquitto.local.conf:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2.0'
+
+  broker-down:
+    desc: Stop and remove local Mosquitto container
+    cmds:
+      - docker rm -f meshtastic-observer-mosquitto
+
+  redis-up:
+    desc: Start local Redis container when START_REDIS_ON_PORT is set
+    cmds:
+      - >-
+        sh -c 'if [ -z "{{.START_REDIS_ON_PORT}}" ]; then
+        echo "Skipping local Redis startup: START_REDIS_ON_PORT is empty";
+        exit 0;
+        fi;
+        docker rm -f meshtastic-observer-redis >/dev/null 2>&1 || true;
+        docker run -d --name meshtastic-observer-redis -p {{.START_REDIS_ON_PORT}}:6379 redis:7-alpine'
+
+  redis-down:
+    desc: Stop and remove local Redis container
+    cmds:
+      - docker rm -f meshtastic-observer-redis
+
+  up:
+    desc: Start local broker and Redis then run observer locally
+    deps:
+      - broker-up
+      - redis-up
+    cmds:
+      - task observer
+
+  down:
+    desc: Stop and remove local broker and Redis containers
+    cmds:
+      - docker rm -f meshtastic-observer-mosquitto || true
+      - docker rm -f meshtastic-observer-redis || true

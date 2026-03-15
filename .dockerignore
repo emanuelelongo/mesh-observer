@@ -1,0 +1,9 @@
+.git
+.gitignore
+bin
+tmp
+.DS_Store
+README.md
+k8s
+helm
+Taskfile.yml
